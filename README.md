@@ -1,71 +1,41 @@
-# Port Scanner
+# port-scanner
 
-Scanner de portas TCP multi-thread escrito em Python puro.
-Desenvolvido como projeto de estudo de cibersegurança.
+Scanner de portas TCP feito em Python, sem bibliotecas externas. Fiz esse projeto estudando cibersegurança para entender como ferramentas como o nmap funcionam por baixo.
 
-
-
-# Funcionalidades
-
-- Varredura TCP paralela com `ThreadPoolExecutor` — 
-- Banner grabbing  opcional para identificar versões de serviços
-- Resolução de hostname  automática
-- Atalho `top100`  com as 100 portas mais comuns
-- Exportação de resultados em JSON, CSV ou TXT
-- Testes unitários com pytest e cobertura de código
+> **Aviso:** use só em sistemas que você tem autorização para testar. Varrer portas sem permissão é ilegal.
 
 ---
 
-##  Estrutura
+## O que ele faz
 
-```
-port-scanner/
-├── cli.py              # Ponto de entrada — interface de linha de comando
-├── src/
-│   └── scanner.py      # Lógica de scan, modelos de dados e exportadores
-├── tests/
-│   └── test_scanner.py # Testes unitários e de integração leve
-├── output/             # Resultados exportados (ignorado pelo git)
-├── docs/
-│   └── exemplos.md     # Exemplos de uso e casos de estudo
-├── requirements.txt
-└── .gitignore
-```
+- Varre portas TCP em paralelo usando threads — 1.000 portas em menos de 10 segundos
+- Tenta capturar o banner do serviço (versão, nome, etc.) com `--banners`
+- Tem um atalho `top100` com as portas mais comuns tipo SSH, HTTP, MySQL...
+- Exporta o resultado em JSON, CSV ou TXT
+- Mostra progresso e cores no terminal
 
----
-
-##  Como usar
-
-### Instalação
+## Como rodar
 
 ```bash
-git clone https://github.com/seuusuario/port-scanner.git
+git clone https://github.com/MizaelDev/port-scanner.git
 cd port-scanner
-pip install -r requirements.txt   # apenas pytest para testes
+pip install -r requirements.txt
 ```
 
-> O scanner em si não tem dependências externas — usa somente a stdlib do Python 3.10+.
-
-### Exemplos
+O `requirements.txt` só tem o pytest. O scanner em si usa só a stdlib do Python.
 
 ```bash
-# Varrer as portas 1-1024 do host de teste oficial do nmap
+# scanme.nmap.org é um servidor público do nmap feito pra testes
 python cli.py scanme.nmap.org -p 1-1024
 
-# Portas específicas com captura de banner
-python cli.py 192.168.1.1 -p 22,80,443,3306 --banners
+# portas específicas com banner
+python cli.py 192.168.1.1 -p 22,80,443 --banners
 
-# Top 100 portas comuns, exportar como JSON
-python cli.py example.com -p top100 -o json
-
-# Scan rápido de range grande com mais threads
-python cli.py 10.0.0.1 -p 1-10000 -t 500 --timeout 0.3
-
-# Mostrar portas fechadas também
-python cli.py 192.168.1.1 -p 80-90 --all
+# exportar resultado
+python cli.py scanme.nmap.org -p top100 -o json
 ```
 
-### Saída esperada
+Saída no terminal:
 
 ```
   Alvo     : scanme.nmap.org
@@ -85,79 +55,51 @@ PORT     STATE        SERVICE          LATENCY   BANNER
 9929     open         unknown          141.9ms
 ```
 
----
+## Argumentos
 
-##  Argumentos
-
-| Argumento       | Padrão    | Descrição                                      |
-|-----------------|-----------|------------------------------------------------|
-| `target`        | —         | IP ou hostname do alvo (obrigatório)           |
-| `-p / --ports`  | `1-1024`  | Portas: `80`, `22,80,443`, `1-1024`, `top100`  |
-| `-t / --threads`| `100`     | Threads paralelas                               |
-| `--timeout`     | `1.0`     | Timeout por porta (segundos)                   |
-| `--banners`     | desligado | Tentar capturar banner dos serviços            |
-| `--all`         | desligado | Mostrar portas fechadas também                 |
-| `-o / --output` | —         | Exportar resultado: `json`, `csv` ou `txt`     |
-
----
+| Argumento        | Padrão   | O que faz                                     |
+|------------------|----------|-----------------------------------------------|
+| `target`         | —        | IP ou hostname (obrigatório)                  |
+| `-p / --ports`   | `1-1024` | Portas: `80`, `22,80,443`, `1-1024`, `top100` |
+| `-t / --threads` | `100`    | Quantas threads rodar em paralelo             |
+| `--timeout`      | `1.0`    | Tempo máximo de espera por porta (segundos)   |
+| `--banners`      | off      | Tenta capturar o banner do serviço            |
+| `--all`          | off      | Mostra portas fechadas também                 |
+| `-o / --output`  | —        | Salva o resultado: `json`, `csv` ou `txt`     |
 
 ## Testes
 
 ```bash
-# Rodar todos os testes
 pytest tests/ -v
-
-# Com cobertura de código
-pytest tests/ --cov=src --cov-report=term-missing
 ```
 
----
+15 testes cobrindo parse de portas, modelos de dados e integração com loopback.
 
-##  Como funciona
+## Como funciona
+
+O scanner abre uma conexão TCP real em cada porta (TCP connect scan). Se conectar, a porta está aberta. Se recusar ou timeout, está fechada ou filtrada.
+
+Usei `ThreadPoolExecutor` pra rodar várias portas ao mesmo tempo — sem isso, varrer 1.000 portas sequencialmente levaria minutos.
 
 ```
-cli.py (argparse + UI)
-    │
-    └─► scanner.run_scan()
-            │
-            ├─► resolve_target()      # socket.gethostbyname
-            │
-            ├─► ThreadPoolExecutor    # N threads paralelas
-            │       └─► scan_port()  # socket.create_connection (TCP)
-            │               └─► grab_banner() [opcional]
-            │
-            └─► ScanResult           # dataclass com todos os resultados
-                    ├─► export_json()
-                    ├─► export_csv()
-                    └─► export_txt()
+cli.py
+  └── scanner.run_scan()
+        ├── resolve_target()       # transforma hostname em IP
+        ├── ThreadPoolExecutor     # threads em paralelo
+        │     └── scan_port()     # tenta conectar via TCP
+        │           └── grab_banner() [se --banners]
+        └── ScanResult            # guarda e exporta os resultados
 ```
 
-**Por que TCP connect scan?**
-O método `connect()` completa o handshake TCP de três vias — é o método mais confiável e não requer privilégios de root. A desvantagem é que ele é mais detectável por firewalls e IDS comparado a técnicas stealth (SYN scan), que exigiriam raw sockets.
+Por que TCP connect e não SYN scan? SYN scan é mais rápido e discreto, mas precisa de raw sockets e permissão de root. O connect scan funciona sem privilégios e foi suficiente pra esse projeto.
 
----
-
-##  Conceitos abordados
-
-- **Sockets TCP** — `socket.create_connection` e timeout
-- **Concorrência** — `ThreadPoolExecutor` com `as_completed`
-- **Dataclasses** — modelagem de dados com `@dataclass`
-- **CLI profissional** — `argparse` com subcomandos e epilog
-- **Exportação de dados** — JSON, CSV, TXT formatado
-- **Testes** — `pytest` com fixtures e casos de borda
-
----
-
-##  Possíveis melhorias (contribuições bem-vindas)
+## O que ainda quero adicionar
 
 - [ ] UDP scan
-- [ ] Detecção de OS via TTL
-- [ ] Output em HTML interativo
-- [ ] Integração com API do Shodan
-- [ ] Rate limiting configurável
+- [ ] Detectar SO pelo TTL
+- [ ] Relatório em HTML
+- [ ] Integração com a API do Shodan
 
----
+## Licença
 
-##  Licença
-
-MIT — veja [LICENSE](LICENSE) para detalhes.
+MIT
